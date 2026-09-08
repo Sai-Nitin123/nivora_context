@@ -1,0 +1,93 @@
+{
+  "name": "nivora-context",
+  "displayName": "Nivora Context",
+  "description": "The Project Brain for AI-Native Software Development — Context Confidence, ADRs, Stale Knowledge Detection & Impact Intelligence",
+  "version": "0.1.0",
+  "publisher": "nivora-labs",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other",
+    "Programming Languages",
+    "Machine Learning"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "nivora-explorer",
+          "title": "Nivora Context",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "nivora-explorer": [
+        {
+          "type": "webview",
+          "id": "nivora.brainWebview",
+          "name": "Project Brain"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "nivora.whatShouldIKnow",
+        "title": "Nivora: What Should I Know Before Modifying This?",
+        "category": "Nivora"
+      },
+      {
+        "command": "nivora.refreshContext",
+        "title": "Nivora: Refresh Project Brain",
+        "category": "Nivora"
+      },
+      {
+        "command": "nivora.exportContext",
+        "title": "Nivora: Export Context Card (Markdown / NCTX)",
+        "category": "Nivora"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "nivora.whatShouldIKnow",
+        "key": "ctrl+shift+n",
+        "mac": "cmd+shift+n",
+        "when": "editorTextFocus || explorerResourceIsFolder || explorerViewletVisible"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "nivora.whatShouldIKnow",
+          "group": "nivora@1"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "nivora.whatShouldIKnow",
+          "group": "nivora@1"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "node esbuild.mjs --production",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.90.0",
+    "esbuild": "^0.23.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}
