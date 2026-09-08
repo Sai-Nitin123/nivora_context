@@ -17,13 +17,13 @@ describe('WorkspaceScanner', () => {
   it('maps import dependencies between code files', async () => {
     const result = await scanner.scan(500);
 
-    // src/extension.ts imports src/core/cache/CacheManager.js
+    // src/extension.ts imports src/core/brain/ProjectBrain.js
     const extDeps = result.dependencyMap.get('src/extension.ts');
     expect(extDeps).toBeDefined();
-    expect(extDeps).toContain('src/core/cache/CacheManager.ts');
+    expect(extDeps).toContain('src/core/brain/ProjectBrain.ts');
 
-    // And CacheManager.ts should have extension.ts in dependentsMap
-    const dependents = result.dependentsMap.get('src/core/cache/CacheManager.ts');
+    // And ProjectBrain.ts should have extension.ts in dependentsMap
+    const dependents = result.dependentsMap.get('src/core/brain/ProjectBrain.ts');
     expect(dependents).toBeDefined();
     expect(dependents).toContain('src/extension.ts');
   });
