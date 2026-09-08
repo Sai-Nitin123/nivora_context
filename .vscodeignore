@@ -1,0 +1,12 @@
+.vscode/**
+.vscode-test/**
+src/**
+**/*.ts
+esbuild.mjs
+tsconfig.json
+UPGRADE.md
+.nivora/**
+.git/**
+.gitignore
+node_modules/**
+*.vsix

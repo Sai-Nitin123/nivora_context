@@ -5,6 +5,11 @@
   "version": "0.1.0",
   "publisher": "nivora-labs",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Sai-Nitin123/nivora_context.git"
+  },
+  "icon": "resources/icon.png",
   "engines": {
     "vscode": "^1.90.0"
   },
