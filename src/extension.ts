@@ -1,25 +1,41 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { ProjectBrain } from './core/brain/ProjectBrain.js';
 import { BrainWebviewProvider } from './ui/BrainWebviewProvider.js';
 import { AgentExporter } from './core/export/AgentExporter.js';
 import { McpServer } from './core/mcp/McpServer.js';
 
-let brain: ProjectBrain | null = null;
+const brainCache: Map<string, ProjectBrain> = new Map();
+let activeBrain: ProjectBrain | null = null;
 let mcpServer: McpServer | null = null;
 
-export async function activate(context: vscode.ExtensionContext) {
-  const workspaceFolders = vscode.workspace.workspaceFolders;
-  const workspaceRoot =
-    workspaceFolders && workspaceFolders.length > 0
-      ? workspaceFolders[0].uri.fsPath
-      : process.cwd();
+function getBrainForPath(targetPath?: string): ProjectBrain {
+  let wsRoot: string;
+  if (targetPath) {
+    const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(targetPath));
+    wsRoot = folder ? folder.uri.fsPath : path.dirname(targetPath);
+  } else {
+    const folders = vscode.workspace.workspaceFolders;
+    wsRoot = folders && folders.length > 0 ? folders[0].uri.fsPath : process.cwd();
+  }
 
-  brain = new ProjectBrain(workspaceRoot);
-  await brain.init();
-  mcpServer = new McpServer(brain);
+  const normRoot = path.normalize(wsRoot);
+  if (!brainCache.has(normRoot)) {
+    const brain = new ProjectBrain(normRoot);
+    brain.init().catch((err) => console.error('[Nivora] Init error:', err));
+    brainCache.set(normRoot, brain);
+  }
+
+  activeBrain = brainCache.get(normRoot)!;
+  mcpServer = new McpServer(activeBrain);
+  return activeBrain;
+}
+
+export async function activate(context: vscode.ExtensionContext) {
+  const initialBrain = getBrainForPath();
 
   // Register Activity Bar Sidebar Webview Provider
-  const provider = new BrainWebviewProvider(context.extensionUri, brain);
+  const provider = new BrainWebviewProvider(context.extensionUri, initialBrain);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(BrainWebviewProvider.viewType, provider, {
       webviewOptions: { retainContextWhenHidden: true },
@@ -42,23 +58,29 @@ export async function activate(context: vscode.ExtensionContext) {
         return;
       }
 
+      const brain = getBrainForPath(targetPath);
+
       // Show in webview
       await provider.displayCardForFile(targetPath);
 
       // Also provide a quick status message with one-click copy action
-      const card = await brain!.whatShouldIKnow(targetPath);
-      const action = await vscode.window.showInformationMessage(
-        `Nivora: ${card.target} (Confidence: ${card.confidence.overall}%)`,
-        '📋 Copy Context for AI',
-        'Open Brain'
-      );
+      try {
+        const card = await brain.whatShouldIKnow(targetPath);
+        const action = await vscode.window.showInformationMessage(
+          `Nivora: ${card.target} (Confidence: ${card.confidence.overall}%)`,
+          '📋 Copy Context for AI',
+          'Open Brain'
+        );
 
-      if (action === '📋 Copy Context for AI') {
-        const md = AgentExporter.toMarkdownHandoff(card);
-        await vscode.env.clipboard.writeText(md);
-        vscode.window.showInformationMessage('Nivora: Context handoff prompt copied to clipboard!');
-      } else if (action === 'Open Brain') {
-        vscode.commands.executeCommand('nivora.brainWebview.focus');
+        if (action === '📋 Copy Context for AI') {
+          const md = AgentExporter.toMarkdownHandoff(card);
+          await vscode.env.clipboard.writeText(md);
+          vscode.window.showInformationMessage('Nivora: Context handoff prompt copied to clipboard!');
+        } else if (action === 'Open Brain') {
+          vscode.commands.executeCommand('nivora.brainWebview.focus');
+        }
+      } catch (err: any) {
+        vscode.window.showErrorMessage(`Nivora analysis error: ${err.message}`);
       }
     }
   );
@@ -73,7 +95,7 @@ export async function activate(context: vscode.ExtensionContext) {
       },
       async () => {
         await provider.refresh();
-        const state = brain!.getState();
+        const state = activeBrain?.getState();
         vscode.window.showInformationMessage(
           `Nivora: Brain updated! Health: ${state?.overallHealth}%, ${state?.filesCount} files, ${state?.decisions.length} ADRs.`
         );
@@ -95,7 +117,8 @@ export async function activate(context: vscode.ExtensionContext) {
         return;
       }
 
-      const card = await brain!.whatShouldIKnow(targetPath);
+      const brain = getBrainForPath(targetPath);
+      const card = await brain.whatShouldIKnow(targetPath);
       const md = AgentExporter.toMarkdownHandoff(card);
       await vscode.env.clipboard.writeText(md);
       vscode.window.showInformationMessage(
@@ -108,7 +131,7 @@ export async function activate(context: vscode.ExtensionContext) {
 }
 
 export function deactivate() {
-  if (brain) {
+  for (const brain of brainCache.values()) {
     brain.cacheManager.flush();
   }
 }

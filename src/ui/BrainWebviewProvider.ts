@@ -27,7 +27,7 @@ export class BrainWebviewProvider implements vscode.WebviewViewProvider {
       localResourceRoots: [this.extensionUri],
     };
 
-    webviewView.webview.html = this.getHtmlForWebview(webviewView.webview);
+    webviewView.webview.html = this.getHtmlForWebview();
 
     webviewView.webview.onDidReceiveMessage(async (data) => {
       switch (data.command) {
@@ -57,7 +57,7 @@ export class BrainWebviewProvider implements vscode.WebviewViewProvider {
           if (data.filePath) {
             const full = path.isAbsolute(data.filePath)
               ? data.filePath
-              : path.join(vscode.workspace.workspaceFolders?.[0].uri.fsPath || '', data.filePath);
+              : path.join(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '', data.filePath);
             try {
               const doc = await vscode.workspace.openTextDocument(full);
               await vscode.window.showTextDocument(doc);
@@ -102,7 +102,7 @@ export class BrainWebviewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private getHtmlForWebview(webview: vscode.Webview): string {
+  private getHtmlForWebview(): string {
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -122,6 +122,7 @@ export class BrainWebviewProvider implements vscode.WebviewViewProvider {
       --success: #a6e3a1;
       --muted: var(--vscode-descriptionForeground, #a6adc8);
     }
+    * { box-sizing: border-box; }
     body {
       font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
       font-size: var(--vscode-font-size, 13px);
@@ -188,7 +189,6 @@ export class BrainWebviewProvider implements vscode.WebviewViewProvider {
     .btn {
       display: block;
       width: 100%;
-      box-sizing: border-box;
       padding: 8px 12px;
       background: var(--accent);
       color: var(--accent-fg);
@@ -230,13 +230,12 @@ export class BrainWebviewProvider implements vscode.WebviewViewProvider {
       gap: 8px;
       margin: 8px 0;
       padding: 6px 8px;
-      background: rgba(0,0,0,0.2);
+      background: rgba(0,0,0,0.25);
       border-radius: 4px;
     }
     .confidence-num {
       font-size: 16px;
       font-weight: 800;
-      color: var(--success);
     }
     .section-title {
       font-size: 11px;
@@ -249,6 +248,7 @@ export class BrainWebviewProvider implements vscode.WebviewViewProvider {
     .list-item {
       margin-bottom: 6px;
       font-size: 12px;
+      word-break: break-word;
     }
     .clickable {
       color: var(--accent);
@@ -304,6 +304,16 @@ export class BrainWebviewProvider implements vscode.WebviewViewProvider {
   <script>
     const vscode = acquireVsCodeApi();
 
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
     document.getElementById('refreshBtn').addEventListener('click', () => {
       vscode.postMessage({ command: 'refreshState' });
     });
@@ -312,10 +322,21 @@ export class BrainWebviewProvider implements vscode.WebviewViewProvider {
       vscode.postMessage({ command: 'whatShouldIKnow' });
     });
 
+    // Event delegation for opening files
+    document.addEventListener('click', (e) => {
+      const target = e.target.closest('[data-filepath]');
+      if (target) {
+        const filePath = target.getAttribute('data-filepath');
+        if (filePath) {
+          vscode.postMessage({ command: 'openFile', filePath });
+        }
+      }
+    });
+
     window.addEventListener('message', (event) => {
       const msg = event.data;
       if (msg.type === 'loading') {
-        document.getElementById('cardContainer').innerHTML = \`<div class="loading-spinner">\${msg.message}</div>\`;
+        document.getElementById('cardContainer').innerHTML = '<div class="loading-spinner">' + escapeHtml(msg.message) + '</div>';
       } else if (msg.type === 'stateUpdate') {
         renderState(msg.state);
         if (msg.card) renderCard(msg.card);
@@ -328,9 +349,9 @@ export class BrainWebviewProvider implements vscode.WebviewViewProvider {
     function renderState(state) {
       if (!state) return;
       document.getElementById('projName').textContent = state.projectName || 'Active Workspace';
-      document.getElementById('healthPercent').textContent = \`\${state.overallHealth}%\`;
-      document.getElementById('healthFill').style.width = \`\${state.overallHealth}%\`;
-      document.getElementById('archDesc').textContent = \`Architecture: \${state.architecture} (\${state.filesCount} files indexed)\`;
+      document.getElementById('healthPercent').textContent = state.overallHealth + '%';
+      document.getElementById('healthFill').style.width = state.overallHealth + '%';
+      document.getElementById('archDesc').textContent = 'Architecture: ' + state.architecture + ' (' + state.filesCount + ' files indexed)';
     }
 
     function renderCard(card) {
@@ -342,86 +363,78 @@ export class BrainWebviewProvider implements vscode.WebviewViewProvider {
       if (conf.overall < 50) confColor = 'var(--error)';
       else if (conf.overall < 80) confColor = 'var(--warn)';
 
-      let html = \`
-        <div class="card">
-          <div class="card-title">
-            <span>\${card.target}</span>
-            <span class="badge badge-blue">Context Card</span>
-          </div>
-
-          <div class="confidence-meter">
-            <div class="confidence-num" style="color: \${confColor};">\${conf.overall}%</div>
-            <div style="font-size: 11px; color: var(--muted);">\${conf.explanation}</div>
-          </div>
-
-          <button id="copyHandoffBtn" class="btn btn-secondary" style="margin-top: 8px; font-size: 12px;">📋 Copy Context for AI Agent</button>
-
-          <div class="section-title">Purpose</div>
-          <div style="font-size: 12px;">\${card.purpose}</div>
-      \`;
+      let html = '<div class="card">' +
+        '<div class="card-title">' +
+          '<span>' + escapeHtml(card.target) + '</span>' +
+          '<span class="badge badge-blue">Context Card</span>' +
+        '</div>' +
+        '<div class="confidence-meter">' +
+          '<div class="confidence-num" style="color: ' + confColor + ';">' + conf.overall + '%</div>' +
+          '<div style="font-size: 11px; color: var(--muted);">' + escapeHtml(conf.explanation) + '</div>' +
+        '</div>' +
+        '<button id="copyHandoffBtn" class="btn btn-secondary" style="margin-top: 8px; font-size: 12px;">📋 Copy Context for AI Agent</button>' +
+        '<div class="section-title">Purpose</div>' +
+        '<div style="font-size: 12px;">' + escapeHtml(card.purpose) + '</div>';
 
       if (card.decisions && card.decisions.length > 0) {
-        html += \`<div class="section-title">Decisions & ADRs</div>\`;
-        card.decisions.forEach(d => {
-          html += \`
-            <div class="list-item">
-              <span class="badge badge-green">\${d.id}</span>
-              <span class="clickable" onclick="openFile('\${d.source}')">\${d.title}</span>
-              <div style="font-size: 11px; color: var(--muted); margin-left: 4px;">\${d.reason}</div>
-            </div>
-          \`;
+        html += '<div class="section-title">Decisions & ADRs</div>';
+        card.decisions.forEach(function(d) {
+          html += '<div class="list-item">' +
+            '<span class="badge badge-green">' + escapeHtml(d.id) + '</span> ' +
+            '<span class="clickable" data-filepath="' + escapeHtml(d.source) + '">' + escapeHtml(d.title) + '</span>' +
+            '<div style="font-size: 11px; color: var(--muted); margin-left: 4px;">' + escapeHtml(d.reason) + '</div>' +
+          '</div>';
         });
       }
 
       if (card.staleWarnings && card.staleWarnings.length > 0) {
-        html += \`<div class="section-title">Stale Knowledge Warnings</div>\`;
-        card.staleWarnings.forEach(w => {
-          html += \`<div class="alert-box alert-warn">⚠️ <b>\${w.title}</b>: \${w.message}</div>\`;
+        html += '<div class="section-title">Stale Knowledge Warnings</div>';
+        card.staleWarnings.forEach(function(w) {
+          html += '<div class="alert-box alert-warn">⚠️ <b>' + escapeHtml(w.title) + '</b>: ' + escapeHtml(w.message) + '</div>';
         });
       }
 
       if (card.knownRisks && card.knownRisks.length > 0) {
-        html += \`<div class="section-title">Known Risks & Invariants</div>\`;
-        card.knownRisks.forEach(r => {
+        html += '<div class="section-title">Known Risks & Invariants</div>';
+        card.knownRisks.forEach(function(r) {
           const alertClass = r.severity === 'high' ? 'alert-error' : 'alert-warn';
-          html += \`<div class="alert-box \${alertClass}"><b>[\${r.severity.toUpperCase()}]</b> \${r.description}</div>\`;
+          html += '<div class="alert-box ' + alertClass + '"><b>[' + r.severity.toUpperCase() + ']</b> ' + escapeHtml(r.description) + '</div>';
         });
       }
 
       if (card.relatedComponents && card.relatedComponents.length > 0) {
-        html += \`<div class="section-title">Dependent Components (\${card.relatedComponents.length})</div>\`;
-        card.relatedComponents.slice(0, 5).forEach(c => {
-          html += \`<div class="list-item clickable" onclick="openFile('\${c}')">→ \${c}</div>\`;
+        html += '<div class="section-title">Dependent Components (' + card.relatedComponents.length + ')</div>';
+        card.relatedComponents.slice(0, 5).forEach(function(c) {
+          html += '<div class="list-item clickable" data-filepath="' + escapeHtml(c) + '">→ ' + escapeHtml(c) + '</div>';
         });
         if (card.relatedComponents.length > 5) {
-          html += \`<div style="font-size: 11px; color: var(--muted);">+ \${card.relatedComponents.length - 5} more</div>\`;
+          html += '<div style="font-size: 11px; color: var(--muted);">+ ' + (card.relatedComponents.length - 5) + ' more</div>';
         }
       }
 
       if (card.recentChanges && card.recentChanges.length > 0) {
-        html += \`<div class="section-title">Recent Git Changes</div>\`;
-        card.recentChanges.slice(0, 3).forEach(ch => {
-          html += \`<div class="list-item" style="font-size: 11px; color: var(--muted);">• \${ch}</div>\`;
+        html += '<div class="section-title">Recent Git Changes</div>';
+        card.recentChanges.slice(0, 3).forEach(function(ch) {
+          html += '<div class="list-item" style="font-size: 11px; color: var(--muted);">• ' + escapeHtml(ch) + '</div>';
         });
       }
 
       if (card.evidence && card.evidence.length > 0) {
-        html += \`<div class="section-title">Verified Evidence (\${card.evidence.length})</div>\`;
-        card.evidence.forEach(e => {
-          html += \`<div class="list-item clickable" onclick="openFile('\${e.location}')" style="font-size: 11px;">[ \${e.type.toUpperCase()} ] \${e.location}</div>\`;
+        html += '<div class="section-title">Verified Evidence (' + card.evidence.length + ')</div>';
+        card.evidence.forEach(function(e) {
+          html += '<div class="list-item clickable" data-filepath="' + escapeHtml(e.location) + '" style="font-size: 11px;">[ ' + e.type.toUpperCase() + ' ] ' + escapeHtml(e.location) + '</div>';
         });
       }
 
-      html += \`</div>\`;
+      html += '</div>';
       container.innerHTML = html;
 
-      document.getElementById('copyHandoffBtn')?.addEventListener('click', () => {
-        vscode.postMessage({ command: 'copyHandoff' });
-      });
-    }
-
-    function openFile(filePath) {
-      vscode.postMessage({ command: 'openFile', filePath });
+      const copyBtn = document.getElementById('copyHandoffBtn');
+      if (copyBtn) {
+        copyBtn.addEventListener('click', function() {
+          vscode.postMessage({ command: 'copyHandoff' });
+        });
+      }
     }
   </script>
 </body>

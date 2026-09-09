@@ -1,3 +1,4 @@
+import * as fs from 'fs/promises';
 import * as path from 'path';
 import {
   ContextCard,
@@ -126,8 +127,8 @@ export class QueryEngine {
       evidenceCount: evidence.length,
     });
 
-    // 9. Formulate purpose
-    const purpose = this.inferPurpose(relPath, directDependencies, relevantDecisions);
+    // 9. Formulate purpose with semantic & docstring extraction
+    const purpose = await this.inferPurpose(relPath, directDependencies, relevantDecisions);
 
     const card: ContextCard = {
       target: relPath,
@@ -176,17 +177,97 @@ export class QueryEngine {
     });
   }
 
-  private inferPurpose(relPath: string, dependencies: string[], decisions: Decision[]): string {
+  private async inferPurpose(
+    relPath: string,
+    dependencies: string[],
+    decisions: Decision[]
+  ): Promise<string> {
     if (decisions.length > 0) {
       return decisions[0].reason;
     }
+
+    // 1. Try reading docstring / top comment from file
+    try {
+      const fullPath = path.isAbsolute(relPath) ? relPath : path.join(this.workspaceRoot, relPath);
+      const content = await fs.readFile(fullPath, 'utf-8');
+      const docstring = this.extractTopDocstring(content);
+      if (docstring) return docstring;
+    } catch {
+      // ignore
+    }
+
+    // 2. Semantic role classification across languages
+    const lower = relPath.toLowerCase();
     const name = path.basename(relPath, path.extname(relPath));
-    if (relPath.includes('cache')) return `Provides caching and persistence for ${name}.`;
-    if (relPath.includes('git')) return `Executes and manages Git analysis operations.`;
-    if (relPath.includes('scanner')) return `Scans and indexes workspace architecture.`;
-    if (relPath.includes('doc')) return `Discovers and parses documentation and ADRs.`;
-    if (relPath.includes('test')) return `Automated test suite validating ${name}.`;
-    if (relPath.includes('extension')) return `VS Code extension activation and command registration hub.`;
-    return `Core module: imports ${dependencies.length} local dependencies.`;
+
+    if (/auth|jwt|token|session|login|oauth|credential/i.test(lower)) {
+      return `Authentication and identity verification module (${name}).`;
+    }
+    if (/payment|stripe|billing|checkout|invoice|transaction/i.test(lower)) {
+      return `Payment processing and financial transaction module (${name}).`;
+    }
+    if (/controller|router|route|endpoint|api|view/i.test(lower)) {
+      return `API routing and request dispatch layer (${name}).`;
+    }
+    if (/service|handler|manager/i.test(lower)) {
+      return `Core business logic and service orchestration (${name}).`;
+    }
+    if (/model|schema|entity|dto/i.test(lower)) {
+      return `Data schema and persistence entity definition (${name}).`;
+    }
+    if (/db|database|repository|repo|migration|dao/i.test(lower)) {
+      return `Database persistence and query abstraction layer (${name}).`;
+    }
+    if (/middleware/i.test(lower)) {
+      return `Request interceptor and HTTP middleware (${name}).`;
+    }
+    if (/util|helper|common|shared/i.test(lower)) {
+      return `Shared utility and helper functions (${name}).`;
+    }
+    if (/worker|queue|job|task|cron/i.test(lower)) {
+      return `Asynchronous background worker / queue processing (${name}).`;
+    }
+    if (/config|settings|env/i.test(lower)) {
+      return `Application configuration and environment management (${name}).`;
+    }
+    if (/test|spec/i.test(lower)) {
+      return `Automated test suite validating ${name}.`;
+    }
+    if (/cache/i.test(lower)) {
+      return `Provides caching and persistence for ${name}.`;
+    }
+    if (/git/i.test(lower)) {
+      return `Executes and manages Git analysis operations.`;
+    }
+    if (/scanner/i.test(lower)) {
+      return `Scans and indexes workspace architecture.`;
+    }
+    if (/doc/i.test(lower)) {
+      return `Discovers and parses documentation and ADRs.`;
+    }
+    if (/extension/i.test(lower)) {
+      return `VS Code extension activation and command registration hub.`;
+    }
+
+    return `Source module: imports ${dependencies.length} local dependencies.`;
+  }
+
+  private extractTopDocstring(content: string): string | null {
+    // Python docstring: """...""" or '''...'''
+    const pyMatch = content.match(/^(?:#[^\r\n]*\r?\n)*\s*(?:"""|''')([\s\S]*?)(?:"""|''')/);
+    if (pyMatch && pyMatch[1].trim()) {
+      const firstLine = pyMatch[1].trim().split('\n')[0].trim();
+      if (firstLine.length > 10) return firstLine;
+    }
+
+    // JSDoc / C-style block comment: /** ... */
+    const jsDocMatch = content.match(/^\s*\/\*\*([\s\S]*?)\*\//);
+    if (jsDocMatch && jsDocMatch[1].trim()) {
+      const clean = jsDocMatch[1].replace(/^\s*\*\s?/gm, '').trim();
+      const firstLine = clean.split('\n')[0].trim();
+      if (firstLine.length > 10) return firstLine;
+    }
+
+    return null;
   }
 }
