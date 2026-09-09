@@ -2,7 +2,7 @@
   "name": "nivora-context",
   "displayName": "Nivora Context",
   "description": "The Project Brain for AI-Native Software Development — Context Confidence, ADRs, Stale Knowledge Detection & Impact Intelligence",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "nivora-labs",
   "license": "MIT",
   "repository": {
@@ -45,6 +45,21 @@
       {
         "command": "nivora.whatShouldIKnow",
         "title": "Nivora: What Should I Know Before Modifying This?",
+        "category": "Nivora"
+      },
+      {
+        "command": "nivora.askQuestion",
+        "title": "Nivora: Ask Question About Codebase",
+        "category": "Nivora"
+      },
+      {
+        "command": "nivora.recordDecision",
+        "title": "Nivora: Record Architectural Decision (ADR)",
+        "category": "Nivora"
+      },
+      {
+        "command": "nivora.recordFailedAttempt",
+        "title": "Nivora: Record Failed Approach (Cross-Agent Memory)",
         "category": "Nivora"
       },
       {

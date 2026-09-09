@@ -13,6 +13,17 @@ import { DocParser } from '../docs/DocParser.js';
 import { FreshnessEngine } from '../intelligence/FreshnessEngine.js';
 import { ConfidenceScorer } from '../intelligence/ConfidenceScorer.js';
 import { RiskEngine } from '../intelligence/RiskEngine.js';
+import { DecisionMiner } from '../intelligence/DecisionMiner.js';
+import { SymbolIndex, SymbolDefinition } from '../scanner/SymbolIndex.js';
+import { SessionMemory } from '../memory/SessionMemory.js';
+
+export interface QueryResult {
+  answer: string;
+  relevantFiles: string[];
+  decisions: Decision[];
+  evidence: Evidence[];
+  confidence: number;
+}
 
 export class QueryEngine {
   private workspaceRoot: string;
@@ -23,6 +34,9 @@ export class QueryEngine {
   private freshnessEngine: FreshnessEngine;
   private confidenceScorer: ConfidenceScorer;
   private riskEngine: RiskEngine;
+  public decisionMiner: DecisionMiner;
+  public symbolIndex: SymbolIndex;
+  public sessionMemory: SessionMemory;
 
   constructor(
     workspaceRoot: string,
@@ -39,6 +53,13 @@ export class QueryEngine {
     this.freshnessEngine = new FreshnessEngine(gitAnalyzer);
     this.confidenceScorer = new ConfidenceScorer();
     this.riskEngine = new RiskEngine();
+    this.decisionMiner = new DecisionMiner(gitAnalyzer);
+    this.symbolIndex = new SymbolIndex();
+    this.sessionMemory = new SessionMemory(workspaceRoot);
+  }
+
+  public async init(): Promise<void> {
+    await this.sessionMemory.init();
   }
 
   /**
@@ -67,9 +88,13 @@ export class QueryEngine {
       (c) => `[${c.shortHash}] ${c.message} (${c.relativeTime || c.date})`
     );
 
-    // 4. Parse decisions & docs
-    const { decisions } = await this.docParser.parseAll(scanResult.files);
-    const relevantDecisions = this.findRelevantDecisions(relPath, decisions);
+    // 4. Parse decisions (Docs + Mined Git Commits + Session Memory)
+    const { decisions: docDecisions } = await this.docParser.parseAll(scanResult.files);
+    const minedDecisions = await this.decisionMiner.mineDecisions(40);
+    const memoryDecisions = this.sessionMemory.getAllDecisions();
+    const allDecisions = [...docDecisions, ...memoryDecisions, ...minedDecisions];
+
+    const relevantDecisions = this.findRelevantDecisions(relPath, allDecisions);
 
     // 5. Check staleness of related decisions
     const staleWarnings: StaleWarning[] = [];
@@ -91,7 +116,20 @@ export class QueryEngine {
       decisions: relevantDecisions,
     });
 
-    // 7. Evidence gathering
+    // 7. Symbol and Function-level Call Extraction
+    let symbols: SymbolDefinition[] = [];
+    try {
+      const fullPath = path.isAbsolute(relPath) ? relPath : path.join(this.workspaceRoot, relPath);
+      const content = await fs.readFile(fullPath, 'utf-8');
+      symbols = this.symbolIndex.indexFile(relPath, content);
+    } catch {
+      // ignore
+    }
+
+    // 8. Session & Failure Memory
+    const failedAttempts = this.sessionMemory.getFailedAttemptsForFile(relPath);
+
+    // 9. Evidence gathering
     const evidence: Evidence[] = [];
     evidence.push({
       type: 'file',
@@ -110,14 +148,14 @@ export class QueryEngine {
 
     for (const d of relevantDecisions) {
       evidence.push({
-        type: 'doc',
+        type: d.source.startsWith('commit') ? 'git' : 'doc',
         location: d.source,
         snippet: `${d.id}: ${d.title} (${d.reason})`,
         timestamp: d.date,
       });
     }
 
-    // 8. Confidence scoring
+    // 10. Confidence scoring
     const confidence = this.confidenceScorer.calculate({
       freshnessScore,
       hasDecisions: relevantDecisions.length > 0,
@@ -127,7 +165,7 @@ export class QueryEngine {
       evidenceCount: evidence.length,
     });
 
-    // 9. Formulate purpose with semantic & docstring extraction
+    // 11. Formulate purpose with semantic & docstring extraction
     const purpose = await this.inferPurpose(relPath, directDependencies, relevantDecisions);
 
     const card: ContextCard = {
@@ -141,6 +179,13 @@ export class QueryEngine {
       confidence,
       evidence,
       tests,
+      symbols: symbols.map((s) => ({ name: s.name, kind: s.kind, line: s.line })),
+      failedAttempts: failedAttempts.map((f) => ({
+        agent: f.agent,
+        date: f.date,
+        attempted: f.attempted,
+        reason: f.reason,
+      })),
       generatedAt: new Date().toISOString(),
     };
 
@@ -148,6 +193,107 @@ export class QueryEngine {
     await this.cacheManager.setContextCard(relPath, card);
 
     return card;
+  }
+
+  /**
+   * Universal "Ask Nivora" codebase question answering engine
+   */
+  public async ask(query: string): Promise<QueryResult> {
+    const cleanQuery = query.toLowerCase().trim();
+    const queryTokens = cleanQuery.split(/\s+/).filter((t) => t.length > 2);
+
+    const scan = await this.scanner.scan(1500);
+    const { decisions: docDecisions, docs } = await this.docParser.parseAll(scan.files);
+    const minedDecisions = await this.decisionMiner.mineDecisions(40);
+    const memoryDecisions = this.sessionMemory.getAllDecisions();
+    const allDecisions = [...docDecisions, ...memoryDecisions, ...minedDecisions];
+
+    // 1. Rank relevant files based on token matches in path & dependencies
+    const scoredFiles: Array<{ file: string; score: number; reason: string }> = [];
+    for (const f of scan.files) {
+      let score = 0;
+      const lower = f.toLowerCase();
+      for (const token of queryTokens) {
+        if (lower.includes(token)) score += 10;
+        if (path.basename(lower).includes(token)) score += 15;
+      }
+      if (score > 0) {
+        scoredFiles.push({ file: f, score, reason: `Matches query keywords in file path.` });
+      }
+    }
+    scoredFiles.sort((a, b) => b.score - a.score);
+    const topFiles = scoredFiles.slice(0, 8).map((sf) => sf.file);
+
+    // 2. Find matching decisions
+    const matchingDecisions = allDecisions.filter((d) => {
+      const text = `${d.id} ${d.title} ${d.reason}`.toLowerCase();
+      return queryTokens.some((t) => text.includes(t));
+    });
+
+    // 3. Evidence Gathering
+    const evidence: Evidence[] = [];
+    for (const f of topFiles.slice(0, 4)) {
+      evidence.push({
+        type: 'file',
+        location: f,
+        snippet: `Indexed component related to query: "${query}"`,
+      });
+    }
+    for (const d of matchingDecisions.slice(0, 3)) {
+      evidence.push({
+        type: d.source.startsWith('commit') ? 'git' : 'doc',
+        location: d.source,
+        snippet: `${d.id}: ${d.title}`,
+      });
+    }
+
+    // 4. Synthesize Answer
+    const lines: string[] = [];
+    lines.push(`### Nivora Project Intelligence: "${query}"\n`);
+
+    if (topFiles.length > 0) {
+      lines.push(`**Key Components Found:**`);
+      for (const f of topFiles) {
+        const dependents = scan.dependentsMap.get(f) || [];
+        const depStr = dependents.length > 0 ? ` (used by ${dependents.length} files)` : '';
+        lines.push(`- \`${f}\`${depStr}`);
+      }
+      lines.push('');
+    } else {
+      lines.push(`No exact file path matches found for query tokens. Scanned ${scan.files.length} project files.`);
+      lines.push('');
+    }
+
+    if (matchingDecisions.length > 0) {
+      lines.push(`**Governing Architectural Decisions:**`);
+      for (const d of matchingDecisions) {
+        lines.push(`- **[${d.id}] ${d.title}**: ${d.reason} *(Source: \`${d.source}\`)*`);
+      }
+      lines.push('');
+    }
+
+    // Include failure memory if relevant
+    const allFailures = this.sessionMemory.getAllFailedAttempts();
+    const matchingFailures = allFailures.filter((f) =>
+      queryTokens.some((t) => `${f.attempted} ${f.reason}`.toLowerCase().includes(t))
+    );
+    if (matchingFailures.length > 0) {
+      lines.push(`**⚠️ Historical Failed Approaches (Do Not Repeat):**`);
+      for (const mf of matchingFailures) {
+        lines.push(`- **${mf.agent}** (${mf.date}): Attempted "${mf.attempted}" → *Failed:* ${mf.reason}`);
+      }
+      lines.push('');
+    }
+
+    const confidence = Math.min(95, Math.max(40, topFiles.length * 15 + matchingDecisions.length * 20));
+
+    return {
+      answer: lines.join('\n'),
+      relevantFiles: topFiles,
+      decisions: matchingDecisions,
+      evidence,
+      confidence,
+    };
   }
 
   private findRelevantDecisions(relPath: string, decisions: Decision[]): Decision[] {

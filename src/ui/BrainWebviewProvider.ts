@@ -41,6 +41,16 @@ export class BrainWebviewProvider implements vscode.WebviewViewProvider {
           }
           break;
         }
+        case 'askQuestion': {
+          if (data.query) {
+            await this.handleAskQuestion(data.query);
+          }
+          break;
+        }
+        case 'recordDecision': {
+          await this.promptAndRecordDecision();
+          break;
+        }
         case 'refreshState': {
           await this.refresh();
           break;
@@ -102,6 +112,50 @@ export class BrainWebviewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  private async handleAskQuestion(query: string) {
+    if (!this.view) return;
+    this.view.webview.postMessage({ type: 'askLoading' });
+    try {
+      const result = await this.brain.ask(query);
+      this.view.webview.postMessage({
+        type: 'askResult',
+        query,
+        answer: result.answer,
+        confidence: result.confidence,
+        files: result.relevantFiles,
+      });
+    } catch (err: any) {
+      this.view.webview.postMessage({
+        type: 'askResult',
+        query,
+        answer: `Error analyzing query: ${err.message}`,
+        confidence: 0,
+        files: [],
+      });
+    }
+  }
+
+  private async promptAndRecordDecision() {
+    const title = await vscode.window.showInputBox({
+      title: 'Record Architectural Decision (ADR)',
+      prompt: 'Enter a clear title for this decision (e.g. "Use JWT tokens for mobile clients")',
+    });
+    if (!title) return;
+
+    const reason = await vscode.window.showInputBox({
+      title: 'Decision Rationale & Context',
+      prompt: 'Explain why this decision was made and what problem it solves',
+    });
+    if (!reason) return;
+
+    const activeFile = vscode.window.activeTextEditor?.document.uri.fsPath;
+    const affected = activeFile ? [vscode.workspace.asRelativePath(activeFile)] : [];
+
+    const decision = await this.brain.recordDecision(title, reason, affected);
+    vscode.window.showInformationMessage(`Nivora: Recorded ${decision.id} — "${decision.title}"!`);
+    await this.refresh();
+  }
+
   private getHtmlForWebview(): string {
     return `<!DOCTYPE html>
 <html lang="en">
@@ -160,9 +214,10 @@ export class BrainWebviewProvider implements vscode.WebviewViewProvider {
     .badge-green { background: rgba(166, 227, 161, 0.2); color: #a6e3a1; }
     .badge-warn { background: rgba(249, 226, 175, 0.2); color: #f9e2af; }
     .badge-error { background: rgba(243, 139, 168, 0.2); color: #f38ba8; }
+    .badge-purple { background: rgba(203, 166, 247, 0.2); color: #cba6f7; }
 
     .health-bar-container {
-      margin: 10px 0 16px 0;
+      margin: 10px 0 12px 0;
       background: var(--card-bg);
       padding: 10px;
       border-radius: 6px;
@@ -184,6 +239,35 @@ export class BrainWebviewProvider implements vscode.WebviewViewProvider {
       height: 100%;
       background: linear-gradient(90deg, #89b4fa, #a6e3a1);
       transition: width 0.3s ease;
+    }
+
+    /* Ask Nivora Chat Box */
+    .ask-box {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+    .ask-input {
+      flex: 1;
+      padding: 8px 10px;
+      background: var(--card-bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-size: 12px;
+      outline: none;
+    }
+    .ask-input:focus {
+      border-color: var(--accent);
+    }
+    .btn-ask {
+      padding: 8px 12px;
+      background: var(--accent);
+      color: var(--accent-fg);
+      border: none;
+      border-radius: 4px;
+      font-weight: 700;
+      cursor: pointer;
     }
 
     .btn {
@@ -213,7 +297,7 @@ export class BrainWebviewProvider implements vscode.WebviewViewProvider {
       border: 1px solid var(--border);
       border-radius: 6px;
       padding: 12px;
-      margin-top: 14px;
+      margin-top: 10px;
     }
     .card-title {
       font-size: 13px;
@@ -266,9 +350,17 @@ export class BrainWebviewProvider implements vscode.WebviewViewProvider {
     .alert-error { background: rgba(243, 139, 168, 0.1); border-color: var(--error); color: var(--error); }
     .loading-spinner {
       text-align: center;
-      padding: 20px;
+      padding: 14px;
       color: var(--muted);
       font-style: italic;
+    }
+    .answer-box {
+      background: rgba(137, 180, 250, 0.08);
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      padding: 10px;
+      margin-bottom: 12px;
+      font-size: 12px;
     }
   </style>
 </head>
@@ -277,10 +369,20 @@ export class BrainWebviewProvider implements vscode.WebviewViewProvider {
   <div class="header">
     <div class="title">
       <span>🧠 NIVORA</span>
-      <span class="badge badge-blue">Project Brain</span>
+      <span class="badge badge-blue">v0.2.0</span>
     </div>
-    <button id="refreshBtn" class="btn-secondary" style="width: auto; padding: 2px 8px; font-size: 11px;">Sync</button>
+    <div style="display: flex; gap: 4px;">
+      <button id="recordDecisionBtn" class="btn-secondary" style="width: auto; padding: 2px 8px; font-size: 11px;">+ ADR</button>
+      <button id="refreshBtn" class="btn-secondary" style="width: auto; padding: 2px 8px; font-size: 11px;">Sync</button>
+    </div>
   </div>
+
+  <!-- Interactive Search / Ask Box -->
+  <div class="ask-box">
+    <input type="text" id="askInput" class="ask-input" placeholder="Ask Nivora about this codebase..." />
+    <button id="askBtn" class="btn-ask">Ask</button>
+  </div>
+  <div id="askResultArea"></div>
 
   <div class="health-bar-container" id="projectOverview">
     <div class="health-header">
@@ -296,8 +398,8 @@ export class BrainWebviewProvider implements vscode.WebviewViewProvider {
   <button id="whatShouldIKnowBtn" class="btn">🔍 What Should I Know Before Changing This?</button>
 
   <div id="cardContainer">
-    <div style="text-align: center; color: var(--muted); padding: 24px 8px; font-size: 12px;">
-      Open any file in the editor and click <b>"What Should I Know?"</b> or press <kbd>Ctrl+Shift+N</kbd> to inspect evidence-backed architecture decisions, git churn, and risk intelligence.
+    <div style="text-align: center; color: var(--muted); padding: 20px 8px; font-size: 12px;">
+      Ask a question above or open any file and click <b>"What Should I Know?"</b> (<kbd>Ctrl+Shift+N</kbd>) to inspect symbols, Git decisions, and risks.
     </div>
   </div>
 
@@ -318,8 +420,25 @@ export class BrainWebviewProvider implements vscode.WebviewViewProvider {
       vscode.postMessage({ command: 'refreshState' });
     });
 
+    document.getElementById('recordDecisionBtn').addEventListener('click', () => {
+      vscode.postMessage({ command: 'recordDecision' });
+    });
+
     document.getElementById('whatShouldIKnowBtn').addEventListener('click', () => {
       vscode.postMessage({ command: 'whatShouldIKnow' });
+    });
+
+    const askInput = document.getElementById('askInput');
+    const askBtn = document.getElementById('askBtn');
+    function submitAsk() {
+      const q = askInput.value.trim();
+      if (q) {
+        vscode.postMessage({ command: 'askQuestion', query: q });
+      }
+    }
+    askBtn.addEventListener('click', submitAsk);
+    askInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submitAsk();
     });
 
     // Event delegation for opening files
@@ -337,6 +456,10 @@ export class BrainWebviewProvider implements vscode.WebviewViewProvider {
       const msg = event.data;
       if (msg.type === 'loading') {
         document.getElementById('cardContainer').innerHTML = '<div class="loading-spinner">' + escapeHtml(msg.message) + '</div>';
+      } else if (msg.type === 'askLoading') {
+        document.getElementById('askResultArea').innerHTML = '<div class="loading-spinner">Searching codebase & architectural decisions...</div>';
+      } else if (msg.type === 'askResult') {
+        renderAskResult(msg);
       } else if (msg.type === 'stateUpdate') {
         renderState(msg.state);
         if (msg.card) renderCard(msg.card);
@@ -351,7 +474,24 @@ export class BrainWebviewProvider implements vscode.WebviewViewProvider {
       document.getElementById('projName').textContent = state.projectName || 'Active Workspace';
       document.getElementById('healthPercent').textContent = state.overallHealth + '%';
       document.getElementById('healthFill').style.width = state.overallHealth + '%';
-      document.getElementById('archDesc').textContent = 'Architecture: ' + state.architecture + ' (' + state.filesCount + ' files indexed)';
+      document.getElementById('archDesc').textContent = 'Architecture: ' + state.architecture + ' (' + state.filesCount + ' files, ' + (state.decisions ? state.decisions.length : 0) + ' decisions)';
+    }
+
+    function renderAskResult(res) {
+      const area = document.getElementById('askResultArea');
+      let html = '<div class="answer-box">' +
+        '<div style="font-weight: 700; margin-bottom: 6px;">Q: "' + escapeHtml(res.query) + '"</div>' +
+        '<div style="white-space: pre-wrap; line-height: 1.4;">' + escapeHtml(res.answer) + '</div>';
+
+      if (res.files && res.files.length > 0) {
+        html += '<div style="margin-top: 8px; font-weight: 600; font-size: 11px;">Jump to file:</div>';
+        res.files.slice(0, 4).forEach(function(f) {
+          html += '<div class="clickable list-item" data-filepath="' + escapeHtml(f) + '">→ ' + escapeHtml(f) + '</div>';
+        });
+      }
+
+      html += '</div>';
+      area.innerHTML = html;
     }
 
     function renderCard(card) {
@@ -376,17 +516,46 @@ export class BrainWebviewProvider implements vscode.WebviewViewProvider {
         '<div class="section-title">Purpose</div>' +
         '<div style="font-size: 12px;">' + escapeHtml(card.purpose) + '</div>';
 
-      if (card.decisions && card.decisions.length > 0) {
-        html += '<div class="section-title">Decisions & ADRs</div>';
-        card.decisions.forEach(function(d) {
+      // Symbols / Functions
+      if (card.symbols && card.symbols.length > 0) {
+        html += '<div class="section-title">Symbols & Functions (' + card.symbols.length + ')</div>';
+        card.symbols.slice(0, 8).forEach(function(s) {
           html += '<div class="list-item">' +
-            '<span class="badge badge-green">' + escapeHtml(d.id) + '</span> ' +
+            '<span class="badge badge-purple">' + escapeHtml(s.kind) + '</span> ' +
+            '<b>' + escapeHtml(s.name) + '</b> <span style="color: var(--muted); font-size: 11px;">(Line ' + s.line + ')</span>' +
+          '</div>';
+        });
+        if (card.symbols.length > 8) {
+          html += '<div style="font-size: 11px; color: var(--muted);">+ ' + (card.symbols.length - 8) + ' more symbols</div>';
+        }
+      }
+
+      // Decisions (ADRs + Mined)
+      if (card.decisions && card.decisions.length > 0) {
+        html += '<div class="section-title">Decisions & ADRs (' + card.decisions.length + ')</div>';
+        card.decisions.forEach(function(d) {
+          const badgeClass = d.id.startsWith('GIT') ? 'badge-blue' : 'badge-green';
+          html += '<div class="list-item">' +
+            '<span class="badge ' + badgeClass + '">' + escapeHtml(d.id) + '</span> ' +
             '<span class="clickable" data-filepath="' + escapeHtml(d.source) + '">' + escapeHtml(d.title) + '</span>' +
             '<div style="font-size: 11px; color: var(--muted); margin-left: 4px;">' + escapeHtml(d.reason) + '</div>' +
           '</div>';
         });
       }
 
+      // Failed Attempts
+      if (card.failedAttempts && card.failedAttempts.length > 0) {
+        html += '<div class="section-title">⚠️ Historical Failed Attempts</div>';
+        card.failedAttempts.forEach(function(fa) {
+          html += '<div class="alert-box alert-warn">' +
+            '<b>' + escapeHtml(fa.agent) + '</b> (' + escapeHtml(fa.date) + '): ' +
+            'Attempted <i>"' + escapeHtml(fa.attempted) + '"</i><br>' +
+            '<span style="color: var(--error);">Reason: ' + escapeHtml(fa.reason) + '</span>' +
+          '</div>';
+        });
+      }
+
+      // Stale warnings
       if (card.staleWarnings && card.staleWarnings.length > 0) {
         html += '<div class="section-title">Stale Knowledge Warnings</div>';
         card.staleWarnings.forEach(function(w) {
@@ -394,6 +563,7 @@ export class BrainWebviewProvider implements vscode.WebviewViewProvider {
         });
       }
 
+      // Known risks
       if (card.knownRisks && card.knownRisks.length > 0) {
         html += '<div class="section-title">Known Risks & Invariants</div>';
         card.knownRisks.forEach(function(r) {
@@ -402,6 +572,7 @@ export class BrainWebviewProvider implements vscode.WebviewViewProvider {
         });
       }
 
+      // Dependent components
       if (card.relatedComponents && card.relatedComponents.length > 0) {
         html += '<div class="section-title">Dependent Components (' + card.relatedComponents.length + ')</div>';
         card.relatedComponents.slice(0, 5).forEach(function(c) {
@@ -412,6 +583,7 @@ export class BrainWebviewProvider implements vscode.WebviewViewProvider {
         }
       }
 
+      // Recent changes
       if (card.recentChanges && card.recentChanges.length > 0) {
         html += '<div class="section-title">Recent Git Changes</div>';
         card.recentChanges.slice(0, 3).forEach(function(ch) {
@@ -419,6 +591,7 @@ export class BrainWebviewProvider implements vscode.WebviewViewProvider {
         });
       }
 
+      // Evidence
       if (card.evidence && card.evidence.length > 0) {
         html += '<div class="section-title">Verified Evidence (' + card.evidence.length + ')</div>';
         card.evidence.forEach(function(e) {

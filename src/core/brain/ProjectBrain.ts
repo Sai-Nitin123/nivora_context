@@ -1,6 +1,7 @@
 import * as path from 'path';
 import {
   ContextCard,
+  Decision,
   Fact,
   ProjectBrainState,
   RiskItem,
@@ -10,7 +11,7 @@ import { CacheManager } from '../cache/CacheManager.js';
 import { GitAnalyzer } from '../git/GitAnalyzer.js';
 import { WorkspaceScanner } from '../scanner/WorkspaceScanner.js';
 import { DocParser } from '../docs/DocParser.js';
-import { QueryEngine } from '../query/QueryEngine.js';
+import { QueryEngine, QueryResult } from '../query/QueryEngine.js';
 import { FreshnessEngine } from '../intelligence/FreshnessEngine.js';
 
 export class ProjectBrain {
@@ -40,6 +41,7 @@ export class ProjectBrain {
 
   public async init(): Promise<void> {
     await this.cacheManager.init();
+    await this.queryEngine.init();
   }
 
   /**
@@ -47,11 +49,14 @@ export class ProjectBrain {
    */
   public async sync(): Promise<ProjectBrainState> {
     const scan = await this.scanner.scan(2000);
-    const { decisions } = await this.docParser.parseAll(scan.files);
+    const { decisions: docDecisions } = await this.docParser.parseAll(scan.files);
+    const minedDecisions = await this.queryEngine.decisionMiner.mineDecisions(40);
+    const memoryDecisions = this.queryEngine.sessionMemory.getAllDecisions();
+    const allDecisions = [...docDecisions, ...memoryDecisions, ...minedDecisions];
 
     // Evaluate project-wide stale knowledge
     const staleKnowledge: StaleWarning[] = [];
-    for (const d of decisions) {
+    for (const d of allDecisions) {
       const warning = await this.freshnessEngine.checkDecisionFreshness(d);
       if (warning) {
         staleKnowledge.push(warning);
@@ -63,13 +68,13 @@ export class ProjectBrain {
       {
         id: 'fact-arch',
         content: `Architecture: ${scan.meta.architecture}`,
-        sources: ['package.json'],
+        sources: ['package configs'],
         confidence: 0.95,
         lastVerified: new Date().toISOString(),
       },
       {
         id: 'fact-files',
-        content: `Workspace contains ${scan.files.length} indexed files.`,
+        content: `Workspace contains ${scan.files.length} indexed source files.`,
         sources: ['workspace filesystem'],
         confidence: 1.0,
         lastVerified: new Date().toISOString(),
@@ -79,8 +84,8 @@ export class ProjectBrain {
     if (scan.meta.dependencies.length > 0) {
       facts.push({
         id: 'fact-deps',
-        content: `Dependencies include ${scan.meta.dependencies.slice(0, 5).join(', ')}.`,
-        sources: ['package.json'],
+        content: `Dependencies include ${scan.meta.dependencies.slice(0, 6).join(', ')}.`,
+        sources: ['package config'],
         confidence: 0.98,
         lastVerified: new Date().toISOString(),
       });
@@ -111,7 +116,7 @@ export class ProjectBrain {
       overallHealth: health,
       filesCount: scan.files.length,
       facts,
-      decisions,
+      decisions: allDecisions,
       risks,
       staleKnowledge,
       lastScanned: new Date().toISOString(),
@@ -123,6 +128,18 @@ export class ProjectBrain {
 
   public async whatShouldIKnow(targetPath: string): Promise<ContextCard> {
     return this.queryEngine.whatShouldIKnow(targetPath);
+  }
+
+  public async ask(query: string): Promise<QueryResult> {
+    return this.queryEngine.ask(query);
+  }
+
+  public async recordDecision(title: string, reason: string, affectedFiles?: string[]): Promise<Decision> {
+    return this.queryEngine.sessionMemory.recordDecision(title, reason, affectedFiles);
+  }
+
+  public async recordFailedAttempt(agent: string, attempted: string, reason: string, affectedFiles?: string[]) {
+    return this.queryEngine.sessionMemory.recordFailedAttempt(agent, attempted, reason, affectedFiles);
   }
 
   public getState(): ProjectBrainState | null {

@@ -84,4 +84,14 @@ affected:
     expect(md).toContain('ADR-014');
     expect(md).toContain('CONTINUE EXECUTION');
   });
+
+  it('answers natural language queries with relevant files and decisions', async () => {
+    const res = await brain.ask('Where is payment processing handled?');
+
+    expect(res.confidence).toBeGreaterThan(0);
+    expect(res.relevantFiles).toContain('src/payments/payment.service.ts');
+    expect(res.decisions.some((d) => d.id === 'ADR-014')).toBe(true);
+    expect(res.answer).toContain('Nivora Project Intelligence');
+    expect(res.answer).toContain('payment.service.ts');
+  });
 });

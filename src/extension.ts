@@ -127,7 +127,75 @@ export async function activate(context: vscode.ExtensionContext) {
     }
   );
 
-  context.subscriptions.push(whatShouldIKnowCmd, refreshContextCmd, exportContextCmd);
+  // Command: Ask Nivora Question
+  const askQuestionCmd = vscode.commands.registerCommand('nivora.askQuestion', async () => {
+    const query = await vscode.window.showInputBox({
+      title: 'Ask Nivora Project Brain',
+      prompt: 'Ask any question about architecture, dependencies, or decisions',
+      placeHolder: 'e.g. Where is authentication handled? Or: What depends on user models?',
+    });
+    if (!query) return;
+
+    vscode.commands.executeCommand('nivora.brainWebview.focus');
+    const brain = getBrainForPath();
+    const res = await brain.ask(query);
+    vscode.window.showInformationMessage(`Nivora [${res.confidence}% confidence]: Found ${res.relevantFiles.length} files, ${res.decisions.length} decisions.`);
+  });
+
+  // Command: Record Architectural Decision
+  const recordDecisionCmd = vscode.commands.registerCommand('nivora.recordDecision', async () => {
+    const title = await vscode.window.showInputBox({
+      title: 'Record Architectural Decision (ADR)',
+      prompt: 'Enter a clear title for this decision',
+    });
+    if (!title) return;
+
+    const reason = await vscode.window.showInputBox({
+      title: 'Decision Rationale',
+      prompt: 'Explain why this decision was made',
+    });
+    if (!reason) return;
+
+    const activeFile = vscode.window.activeTextEditor?.document.uri.fsPath;
+    const brain = getBrainForPath(activeFile);
+    const affected = activeFile ? [vscode.workspace.asRelativePath(activeFile)] : [];
+
+    const dec = await brain.recordDecision(title, reason, affected);
+    vscode.window.showInformationMessage(`Nivora: Recorded ${dec.id} — "${dec.title}"!`);
+    await provider.refresh();
+  });
+
+  // Command: Record Failed Approach (Cross-Agent Memory)
+  const recordFailedAttemptCmd = vscode.commands.registerCommand('nivora.recordFailedAttempt', async () => {
+    const attempted = await vscode.window.showInputBox({
+      title: 'Record Failed Attempt (AI Memory)',
+      prompt: 'What approach was attempted and failed?',
+    });
+    if (!attempted) return;
+
+    const reason = await vscode.window.showInputBox({
+      title: 'Failure Reason',
+      prompt: 'Why did this approach fail?',
+    });
+    if (!reason) return;
+
+    const activeFile = vscode.window.activeTextEditor?.document.uri.fsPath;
+    const brain = getBrainForPath(activeFile);
+    const affected = activeFile ? [vscode.workspace.asRelativePath(activeFile)] : [];
+
+    await brain.recordFailedAttempt('Developer', attempted, reason, affected);
+    vscode.window.showInformationMessage('Nivora: Failed approach saved to project memory! AI agents will avoid repeating it.');
+    await provider.refresh();
+  });
+
+  context.subscriptions.push(
+    whatShouldIKnowCmd,
+    refreshContextCmd,
+    exportContextCmd,
+    askQuestionCmd,
+    recordDecisionCmd,
+    recordFailedAttemptCmd
+  );
 }
 
 export function deactivate() {

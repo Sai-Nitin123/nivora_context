@@ -75,8 +75,24 @@ export class AgentExporter {
       lines.push('');
     }
 
+    if (card.symbols && card.symbols.length > 0) {
+      lines.push('## 8. Exported Functions & Classes');
+      for (const sym of card.symbols.slice(0, 10)) {
+        lines.push(`- \`${sym.kind} ${sym.name}\` (Line ${sym.line})`);
+      }
+      lines.push('');
+    }
+
+    if (card.failedAttempts && card.failedAttempts.length > 0) {
+      lines.push('## 9. ⚠️ Historical Failed Attempts (Do Not Repeat)');
+      for (const fa of card.failedAttempts) {
+        lines.push(`- **${fa.agent}** (${fa.date}): Attempted "${fa.attempted}" → *Failed:* ${fa.reason}`);
+      }
+      lines.push('');
+    }
+
     if (card.evidence.length > 0) {
-      lines.push('## 8. Verified Evidence Provenance');
+      lines.push('## 10. Verified Evidence Provenance');
       for (const ev of card.evidence) {
         lines.push(`- **[${ev.type.toUpperCase()}]** \`${ev.location}\`${ev.snippet ? `: ${ev.snippet}` : ''}`);
       }

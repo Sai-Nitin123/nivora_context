@@ -37,6 +37,40 @@ export class McpServer {
         },
       },
       {
+        name: 'nivora_ask_question',
+        description:
+          'Ask natural language questions about the codebase architecture, dependencies, recent changes, and decisions with evidence citations.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            query: {
+              type: 'string',
+              description: 'The natural language question to ask (e.g. "Where is authentication handled?")',
+            },
+          },
+          required: ['query'],
+        },
+      },
+      {
+        name: 'nivora_record_failed_attempt',
+        description:
+          'Records an approach that failed during debugging or implementation so future agents do not repeat it.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            agent: { type: 'string', description: 'Name of the AI agent or developer' },
+            attempted: { type: 'string', description: 'What approach was tried' },
+            reason: { type: 'string', description: 'Why it failed' },
+            affectedFiles: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Files involved in the failed attempt',
+            },
+          },
+          required: ['agent', 'attempted', 'reason'],
+        },
+      },
+      {
         name: 'nivora_project_health',
         description: 'Returns project architecture, health score, and stale documentation warnings.',
         inputSchema: {
@@ -66,6 +100,39 @@ export class McpServer {
         };
       }
 
+      if (name === 'nivora_ask_question') {
+        const query = args.query;
+        if (!query) {
+          return {
+            content: [{ type: 'text', text: 'Error: query argument is required.' }],
+            isError: true,
+          };
+        }
+
+        const result = await this.brain.ask(query);
+        return {
+          content: [{ type: 'text', text: result.answer }],
+        };
+      }
+
+      if (name === 'nivora_record_failed_attempt') {
+        const { agent, attempted, reason, affectedFiles } = args;
+        const record = await this.brain.recordFailedAttempt(
+          agent || 'AI Agent',
+          attempted,
+          reason,
+          affectedFiles || []
+        );
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Successfully recorded failed attempt: "${record.attempted}" (Reason: ${record.reason}). Future AI agents will be warned.`,
+            },
+          ],
+        };
+      }
+
       if (name === 'nivora_project_health') {
         let state = this.brain.getState();
         if (!state) {
@@ -77,7 +144,7 @@ export class McpServer {
           `**Architecture:** ${state.architecture}`,
           `**Context Health:** ${state.overallHealth}%`,
           `**Indexed Files:** ${state.filesCount}`,
-          `**Decisions (ADRs):** ${state.decisions.length}`,
+          `**Decisions (ADRs + Mined):** ${state.decisions.length}`,
           `**Stale Warnings:** ${state.staleKnowledge.length}`,
         ].join('\n');
 

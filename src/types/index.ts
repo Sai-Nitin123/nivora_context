@@ -91,6 +91,8 @@ export interface ContextCard {
   confidence: ConfidenceScore;
   evidence: Evidence[];
   tests: string[];
+  symbols?: Array<{ name: string; kind: string; line: number }>;
+  failedAttempts?: Array<{ agent: string; date: string; attempted: string; reason: string }>;
   generatedAt: string;
 }
 
